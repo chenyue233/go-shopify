@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/go-querystring/query"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -376,17 +377,26 @@ func CheckResponseError(r *http.Response) error {
 
 // General list options that can be used for most collections of entities.
 type ListOptions struct {
-	Page         int       `url:"page,omitempty"`
-	Limit        int       `url:"limit,omitempty"`
-	SinceID      int64     `url:"since_id,omitempty"`
-	CreatedAtMin time.Time `url:"created_at_min,omitempty"`
-	CreatedAtMax time.Time `url:"created_at_max,omitempty"`
-	UpdatedAtMin time.Time `url:"updated_at_min,omitempty"`
-	UpdatedAtMax time.Time `url:"updated_at_max,omitempty"`
-	Order        string    `url:"order,omitempty"`
-	Fields       string    `url:"fields,omitempty"`
-	Vendor       string    `url:"vendor,omitempty"`
-	IDs          []int64   `url:"ids,omitempty,comma"`
+	Page                   int       `url:"page,omitempty"`
+	Limit                  int       `url:"limit,omitempty"`
+	SinceID                int64     `url:"since_id,omitempty"`
+	CreatedAtMin           time.Time `url:"created_at_min,omitempty"`
+	CreatedAtMax           time.Time `url:"created_at_max,omitempty"`
+	UpdatedAtMin           time.Time `url:"updated_at_min,omitempty"`
+	UpdatedAtMax           time.Time `url:"updated_at_max,omitempty"`
+	Order                  string    `url:"order,omitempty"`
+	Fields                 string    `url:"fields,omitempty"`
+	Vendor                 string    `url:"vendor,omitempty"`
+	IDs                    []int64   `url:"ids,omitempty,comma"`
+	Title                  string    `url:"title,omitempty"`
+	Handle                 string    `url:"handle,omitempty"`
+	ProductType            string    `url:"product_type,omitempty"`
+	ColectionId            []int64   `url:"collection_id,omitempty,comma"`
+	PublishedAtMin         time.Time `url:"published_at_min,omitempty"`
+	PublishedAtMax         time.Time `url:"published_at_max,omitempty"`
+	PublishedStatus        string    `url:"published_status,omitempty"`
+	presentment_currencies []string  `url:"presentment_currencies,omitempty,comma"`
+	Status                 string    `url:"status,omitempty"`
 }
 
 // General count options that can be used for most collection counts.
@@ -416,6 +426,12 @@ func (c *Client) Count(path string, options interface{}) (int, error) {
 // Any data returned from Shopify will be marshalled into resource argument.
 func (c *Client) CreateAndDo(method, path string, data, options, resource interface{}) error {
 	req, err := c.NewRequest(method, path, data, options)
+	log := logrus.WithFields(logrus.Fields{
+		"url":    req.URL.Path,
+		"header": req.Header,
+	})
+	log.Debugf("请求已经发出！")
+
 	if err != nil {
 		return err
 	}

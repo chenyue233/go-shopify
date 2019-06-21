@@ -60,6 +60,7 @@ type ProductOption struct {
 	Name      string   `json:"name,omitempty"`
 	Position  int      `json:"position,omitempty"`
 	Values    []string `json:"values,omitempty"`
+	Ids string `json:"ids,omitempty"`
 }
 
 // Represents the result from the products/X.json endpoint
