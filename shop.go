@@ -1,7 +1,6 @@
 package goshopify
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -68,6 +67,7 @@ type Shop struct {
 	MoneyWithCurrencyInEmailsFormat string     `json:"money_with_currency_in_emails_format"`
 	EligibleForPayments             bool       `json:"eligible_for_payments"`
 	RequiresExtraPaymentsAgreement  bool       `json:"requires_extra_payments_agreement"`
+	PreLaunchEnabled                bool       `json:"pre_launch_enabled"`
 }
 
 // Represents the result from the admin/shop.json endpoint
@@ -78,6 +78,6 @@ type ShopResource struct {
 // Get shop
 func (s *ShopServiceOp) Get(options interface{}) (*Shop, error) {
 	resource := new(ShopResource)
-	err := s.client.Get(fmt.Sprintf("%s/shop.json", globalApiPathPrefix), resource, options)
+	err := s.client.Get("shop.json", resource, options)
 	return resource.Shop, err
 }

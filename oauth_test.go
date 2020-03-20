@@ -1,14 +1,14 @@
 package goshopify
 
 import (
-	"net/url"
-	"testing"
-
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"gopkg.in/jarcoal/httpmock.v1"
 	"net/http"
+	"net/url"
+	"testing"
+
+	"github.com/jarcoal/httpmock"
 )
 
 func TestAppAuthorizeUrl(t *testing.T) {
@@ -38,6 +38,7 @@ func TestAppGetAccessToken(t *testing.T) {
 	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
 		httpmock.NewStringResponder(200, `{"access_token":"footoken"}`))
 
+	app.Client = client
 	token, err := app.GetAccessToken("fooshop", "foocode")
 
 	if err != nil {
@@ -47,6 +48,20 @@ func TestAppGetAccessToken(t *testing.T) {
 	expected := "footoken"
 	if token != expected {
 		t.Errorf("Token = %v, expected %v", token, expected)
+	}
+}
+
+func TestAppGetAccessTokenError(t *testing.T) {
+	setup()
+	defer teardown()
+
+	// app.Client isn't specified so NewClient called
+	expectedError := errors.New("invalid_request")
+
+	_, err := app.GetAccessToken("fooshop", "")
+
+	if err == nil || err.Error() != expectedError.Error() {
+		t.Errorf("Expected error %s got error %s", expectedError.Error(), err.Error())
 	}
 }
 

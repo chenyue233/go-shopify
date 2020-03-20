@@ -8,6 +8,7 @@ import (
 )
 
 const variantsBasePath = "variants"
+const variantsResourceName = "variants"
 
 // VariantService is an interface for interacting with the variant endpoints
 // of the Shopify API.
@@ -19,6 +20,9 @@ type VariantService interface {
 	Create(int64, Variant) (*Variant, error)
 	Update(Variant) (*Variant, error)
 	Delete(int64, int64) error
+
+	// MetafieldsService used for Variant resource to communicate with Metafields resource
+	MetafieldsService
 }
 
 // VariantServiceOp handles communication with the variant related methods of
@@ -47,6 +51,7 @@ type Variant struct {
 	CreatedAt            *time.Time       `json:"created_at,omitempty"`
 	UpdatedAt            *time.Time       `json:"updated_at,omitempty"`
 	Taxable              bool             `json:"taxable,omitempty"`
+	TaxCode              string           `json:"tax_code,omitempty"`
 	Barcode              string           `json:"barcode,omitempty"`
 	ImageID              int64            `json:"image_id,omitempty"`
 	InventoryQuantity    int              `json:"inventory_quantity,omitempty"`
@@ -55,6 +60,7 @@ type Variant struct {
 	OldInventoryQuantity int              `json:"old_inventory_quantity,omitempty"`
 	RequireShipping      bool             `json:"requires_shipping,omitempty"`
 	AdminGraphqlAPIID    string           `json:"admin_graphql_api_id,omitempty"`
+	Metafields           []Metafield      `json:"metafields,omitempty"`
 }
 
 // VariantResource represents the result from the variants/X.json endpoint
@@ -69,7 +75,7 @@ type VariantsResource struct {
 
 // List variants
 func (s *VariantServiceOp) List(productID int64, options interface{}) ([]Variant, error) {
-	path := fmt.Sprintf("%s/%s/%d/variants.json", globalApiPathPrefix, productsBasePath, productID)
+	path := fmt.Sprintf("%s/%d/variants.json", productsBasePath, productID)
 	resource := new(VariantsResource)
 	err := s.client.Get(path, resource, options)
 	return resource.Variants, err
@@ -77,13 +83,13 @@ func (s *VariantServiceOp) List(productID int64, options interface{}) ([]Variant
 
 // Count variants
 func (s *VariantServiceOp) Count(productID int64, options interface{}) (int, error) {
-	path := fmt.Sprintf("%s/%s/%d/variants/count.json", globalApiPathPrefix, productsBasePath, productID)
+	path := fmt.Sprintf("%s/%d/variants/count.json", productsBasePath, productID)
 	return s.client.Count(path, options)
 }
 
 // Get individual variant
 func (s *VariantServiceOp) Get(variantID int64, options interface{}) (*Variant, error) {
-	path := fmt.Sprintf("%s/%s/%d.json", globalApiPathPrefix, variantsBasePath, variantID)
+	path := fmt.Sprintf("%s/%d.json", variantsBasePath, variantID)
 	resource := new(VariantResource)
 	err := s.client.Get(path, resource, options)
 	return resource.Variant, err
@@ -91,7 +97,7 @@ func (s *VariantServiceOp) Get(variantID int64, options interface{}) (*Variant, 
 
 // Create a new variant
 func (s *VariantServiceOp) Create(productID int64, variant Variant) (*Variant, error) {
-	path := fmt.Sprintf("%s/%s/%d/variants.json", globalApiPathPrefix, productsBasePath, productID)
+	path := fmt.Sprintf("%s/%d/variants.json", productsBasePath, productID)
 	wrappedData := VariantResource{Variant: &variant}
 	resource := new(VariantResource)
 	err := s.client.Post(path, wrappedData, resource)
@@ -100,14 +106,50 @@ func (s *VariantServiceOp) Create(productID int64, variant Variant) (*Variant, e
 
 // Update existing variant
 func (s *VariantServiceOp) Update(variant Variant) (*Variant, error) {
-	path := fmt.Sprintf("%s/%s/%d.json", globalApiPathPrefix, variantsBasePath, variant.ID)
+	path := fmt.Sprintf("%s/%d.json", variantsBasePath, variant.ID)
 	wrappedData := VariantResource{Variant: &variant}
 	resource := new(VariantResource)
 	err := s.client.Put(path, wrappedData, resource)
 	return resource.Variant, err
 }
 
-// Delete an existing product
+// Delete an existing variant
 func (s *VariantServiceOp) Delete(productID int64, variantID int64) error {
-	return s.client.Delete(fmt.Sprintf("%s/%s/%d/variants/%d.json", globalApiPathPrefix, productsBasePath, productID, variantID))
+	return s.client.Delete(fmt.Sprintf("%s/%d/variants/%d.json", productsBasePath, productID, variantID))
+}
+
+// ListMetafields for a variant
+func (s *VariantServiceOp) ListMetafields(variantID int64, options interface{}) ([]Metafield, error) {
+	metafieldService := &MetafieldServiceOp{client: s.client, resource: variantsResourceName, resourceID: variantID}
+	return metafieldService.List(options)
+}
+
+// CountMetafields for a variant
+func (s *VariantServiceOp) CountMetafields(variantID int64, options interface{}) (int, error) {
+	metafieldService := &MetafieldServiceOp{client: s.client, resource: variantsResourceName, resourceID: variantID}
+	return metafieldService.Count(options)
+}
+
+// GetMetafield for a variant
+func (s *VariantServiceOp) GetMetafield(variantID int64, metafieldID int64, options interface{}) (*Metafield, error) {
+	metafieldService := &MetafieldServiceOp{client: s.client, resource: variantsResourceName, resourceID: variantID}
+	return metafieldService.Get(metafieldID, options)
+}
+
+// CreateMetafield for a variant
+func (s *VariantServiceOp) CreateMetafield(variantID int64, metafield Metafield) (*Metafield, error) {
+	metafieldService := &MetafieldServiceOp{client: s.client, resource: variantsResourceName, resourceID: variantID}
+	return metafieldService.Create(metafield)
+}
+
+// UpdateMetafield for a variant
+func (s *VariantServiceOp) UpdateMetafield(variantID int64, metafield Metafield) (*Metafield, error) {
+	metafieldService := &MetafieldServiceOp{client: s.client, resource: variantsResourceName, resourceID: variantID}
+	return metafieldService.Update(metafield)
+}
+
+// DeleteMetafield for a variant
+func (s *VariantServiceOp) DeleteMetafield(variantID int64, metafieldID int64) error {
+	metafieldService := &MetafieldServiceOp{client: s.client, resource: variantsResourceName, resourceID: variantID}
+	return metafieldService.Delete(metafieldID)
 }

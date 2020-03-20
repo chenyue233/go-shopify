@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"path"
 	"reflect"
 	"regexp"
 	"sort"
@@ -21,11 +22,16 @@ import (
 
 const (
 	UserAgent = "goshopify/1.0.0"
+
+	// Shopify API version YYYY-MM - defaults to admin which uses the oldest stable version of the api
+	defaultApiPathPrefix = "admin"
+	defaultApiVersion    = "stable"
+	defaultHttpTimeout   = 10
 )
 
 var (
-	// Shopify API version YYYY-MM - defaults to admin which uses the oldest stable version of the api
-	globalApiPathPrefix string = "admin"
+	// version regex match
+	apiVersionRegex = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}$`)
 )
 
 // App represents basic app settings such as Api key, secret, scope, and redirect url.
@@ -36,11 +42,18 @@ type App struct {
 	RedirectUrl string
 	Scope       string
 	Password    string
+	Client      *Client // see GetAccessToken
+}
+
+type RateLimitInfo struct {
+	RequestCount      int
+	BucketSize        int
+	RetryAfterSeconds float64
 }
 
 // Client manages communication with the Shopify API.
 type Client struct {
-	// HTTP client used to communicate with the DO API.
+	// HTTP client used to communicate with the Shopify API.
 	Client *http.Client
 
 	// App settings
@@ -51,8 +64,16 @@ type Client struct {
 	// its own client.
 	baseURL *url.URL
 
+	// URL Prefix, defaults to "admin" see WithVersion
+	pathPrefix string
+
+	// version you're currently using of the api, defaults to "stable"
+	apiVersion string
+
 	// A permanent access token
 	token string
+
+	RateLimits RateLimitInfo
 
 	// Services used for communicating with the API
 	Product                    ProductService
@@ -90,6 +111,21 @@ type ResponseError struct {
 	Status  int
 	Message string
 	Errors  []string
+}
+
+// GetStatus returns http  response status
+func (e ResponseError) GetStatus() int {
+	return e.Status
+}
+
+// GetMessage returns response error message
+func (e ResponseError) GetMessage() string {
+	return e.Message
+}
+
+// GetErrors returns response errors list
+func (e ResponseError) GetErrors() []string {
+	return e.Errors
 }
 
 func (e ResponseError) Error() string {
@@ -130,8 +166,8 @@ type RateLimitError struct {
 // be resolved to the BaseURL of the Client. Relative URLS should always be
 // specified without a preceding slash. If specified, the value pointed to by
 // body is JSON encoded and included as the request body.
-func (c *Client) NewRequest(method, urlStr string, body, options interface{}) (*http.Request, error) {
-	rel, err := url.Parse(urlStr)
+func (c *Client) NewRequest(method, relPath string, body, options interface{}) (*http.Request, error) {
+	rel, err := url.Parse(relPath)
 	if err != nil {
 		return nil, err
 	}
@@ -186,12 +222,12 @@ type Option func(c *Client)
 // WithVersion optionally sets the api-version if the passed string is valid
 func WithVersion(apiVersion string) Option {
 	return func(c *Client) {
-		var rxPat = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}$`)
-		if len(apiVersion) > 0 && rxPat.MatchString(apiVersion) {
-			globalApiPathPrefix = fmt.Sprintf("admin/api/%s", apiVersion)
-		} else {
-			globalApiPathPrefix = "admin"
+		pathPrefix := defaultApiPathPrefix
+		if len(apiVersion) > 0 && apiVersionRegex.MatchString(apiVersion) {
+			pathPrefix = fmt.Sprintf("admin/api/%s", apiVersion)
 		}
+		c.apiVersion = apiVersion
+		c.pathPrefix = pathPrefix
 	}
 }
 
@@ -207,11 +243,22 @@ func (a App) NewClient(shopName, token string, opts ...Option) *Client {
 // token. The shopName parameter is the shop's myshopify domain,
 // e.g. "theshop.myshopify.com", or simply "theshop"
 func NewClient(app App, shopName, token string, opts ...Option) *Client {
-	httpClient := http.DefaultClient
+	baseURL, err := url.Parse(ShopBaseUrl(shopName))
+	if err != nil {
+		panic(err) // something really wrong with shopName
+	}
 
-	baseURL, _ := url.Parse(ShopBaseUrl(shopName))
+	c := &Client{
+		Client: &http.Client{
+			Timeout: time.Second * defaultHttpTimeout,
+		},
+		app:        app,
+		baseURL:    baseURL,
+		token:      token,
+		apiVersion: defaultApiVersion,
+		pathPrefix: defaultApiPathPrefix,
+	}
 
-	c := &Client{Client: httpClient, app: app, baseURL: baseURL, token: token}
 	c.Product = &ProductServiceOp{client: c}
 	c.CustomCollection = &CustomCollectionServiceOp{client: c}
 	c.SmartCollection = &SmartCollectionServiceOp{client: c}
@@ -252,26 +299,48 @@ func NewClient(app App, shopName, token string, opts ...Option) *Client {
 // response. It does not make much sense to call Do without a prepared
 // interface instance.
 func (c *Client) Do(req *http.Request, v interface{}) error {
-	resp, err := c.Client.Do(req)
+	_, err := c.doGetHeaders(req, v)
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// doGetHeaders executes a request, decoding the response into `v` and also returns any response headers.
+func (c *Client) doGetHeaders(req *http.Request, v interface{}) (http.Header, error) {
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	err = CheckResponseError(resp)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	if c.apiVersion == defaultApiVersion && resp.Header.Get("X-Shopify-API-Version") != "" {
+		// if using stable on first request set the api version
+		c.apiVersion = resp.Header.Get("X-Shopify-API-Version")
 	}
 
 	if v != nil {
 		decoder := json.NewDecoder(resp.Body)
 		err := decoder.Decode(&v)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	if s := strings.Split(resp.Header.Get("X-Shopify-Shop-Api-Call-Limit"), "/"); len(s) == 2 {
+		c.RateLimits.RequestCount, _ = strconv.Atoi(s[0])
+		c.RateLimits.BucketSize, _ = strconv.Atoi(s[1])
+	}
+
+	c.RateLimits.RetryAfterSeconds, _ = strconv.ParseFloat(resp.Header.Get("Retry-After"), 64)
+
+	return resp.Header, nil
 }
 
 func wrapSpecificError(r *http.Response, err ResponseError) error {
@@ -377,17 +446,22 @@ func CheckResponseError(r *http.Response) error {
 
 // General list options that can be used for most collections of entities.
 type ListOptions struct {
-	Page                   int       `url:"page,omitempty"`
-	Limit                  int       `url:"limit,omitempty"`
-	SinceID                int64     `url:"since_id,omitempty"`
-	CreatedAtMin           time.Time `url:"created_at_min,omitempty"`
-	CreatedAtMax           time.Time `url:"created_at_max,omitempty"`
-	UpdatedAtMin           time.Time `url:"updated_at_min,omitempty"`
-	UpdatedAtMax           time.Time `url:"updated_at_max,omitempty"`
-	Order                  string    `url:"order,omitempty"`
-	Fields                 string    `url:"fields,omitempty"`
-	Vendor                 string    `url:"vendor,omitempty"`
-	IDs                    []int64   `url:"ids,omitempty,comma"`
+	// PageInfo is used with new pagination search.
+	PageInfo string `url:"page_info,omitempty"`
+
+	// Page is used to specify a specific page to load.
+	// It is the deprecated way to do pagination.
+	Page         int       `url:"page,omitempty"`
+	Limit        int       `url:"limit,omitempty"`
+	SinceID      int64     `url:"since_id,omitempty"`
+	CreatedAtMin time.Time `url:"created_at_min,omitempty"`
+	CreatedAtMax time.Time `url:"created_at_max,omitempty"`
+	UpdatedAtMin time.Time `url:"updated_at_min,omitempty"`
+	UpdatedAtMax time.Time `url:"updated_at_max,omitempty"`
+	Order        string    `url:"order,omitempty"`
+	Fields       string    `url:"fields,omitempty"`
+	Vendor       string    `url:"vendor,omitempty"`
+	IDs          []int64   `url:"ids,omitempty,comma"`
 	Title                  string    `url:"title,omitempty"`
 	Handle                 string    `url:"handle,omitempty"`
 	ProductType            string    `url:"product_type,omitempty"`
@@ -424,24 +498,33 @@ func (c *Client) Count(path string, options interface{}) (int, error) {
 // The options argument is used for specifying request options such as search
 // parameters like created_at_min
 // Any data returned from Shopify will be marshalled into resource argument.
-func (c *Client) CreateAndDo(method, path string, data, options, resource interface{}) error {
-	req, err := c.NewRequest(method, path, data, options)
+func (c *Client) CreateAndDo(method, relPath string, data, options, resource interface{}) error {
+	_, err := c.createAndDoGetHeaders(method, relPath, data, options, resource)
 	log := logrus.WithFields(logrus.Fields{
 		"url":    req.URL.Path,
 		"header": req.Header,
 	})
-	log.Debugf("请求已经发出！")
-
+	log.WithError(err).Debugf("请求已经发出！")
 	if err != nil {
 		return err
 	}
-
-	err = c.Do(req, resource)
-	if err != nil {
-		return err
-	}
-
 	return nil
+}
+
+// createAndDoGetHeaders creates an executes a request while returning the response headers.
+func (c *Client) createAndDoGetHeaders(method, relPath string, data, options, resource interface{}) (http.Header, error) {
+	if strings.HasPrefix(relPath, "/") {
+		// make sure it's a relative path
+		relPath = strings.TrimLeft(relPath, "/")
+	}
+
+	relPath = path.Join(c.pathPrefix, relPath)
+	req, err := c.NewRequest(method, relPath, data, options)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.doGetHeaders(req, resource)
 }
 
 // Get performs a GET request for the given path and saves the result in the
