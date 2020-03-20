@@ -499,7 +499,7 @@ func (c *Client) Count(path string, options interface{}) (int, error) {
 // parameters like created_at_min
 // Any data returned from Shopify will be marshalled into resource argument.
 func (c *Client) CreateAndDo(method, relPath string, data, options, resource interface{}) error {
-	_, err := c.createAndDoGetHeaders(method, relPath, data, options, resource)
+	req, err := c.createAndDoGetHeaders(method, relPath, data, options, resource)
 	log := logrus.WithFields(logrus.Fields{
 		"url":    req.URL.Path,
 		"header": req.Header,
